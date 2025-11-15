@@ -4,9 +4,15 @@
 
 {% block content %}
 <div class="form-container">
-    <h2 style="text-align: center; color: #333; margin-bottom: 30px;">One-Time Payment - $25</h2>
+    <h2 style="text-align: center; color: #333; margin-bottom: 30px;">
+        One-Time Payment
+        {% if price_info %}
+            - {{ price_info.currency }}{{ "%.2f"|format(price_info.amount) }}
+        {% endif %}
+    </h2>
     
-    <form method="POST" action="{{ url_for('one_time_payment') }}">
+    <!-- Form to collect user info -->
+    <form id="payment-form">
         <div class="form-group">
             <label for="name">Full Name</label>
             <input type="text" id="name" name="name" required placeholder="Enter your full name">
@@ -17,10 +23,80 @@
             <input type="email" id="email" name="email" required placeholder="Enter your email">
         </div>
         
-        <button type="submit" class="btn">Complete Payment - $25</button>
+        <button type="submit" class="btn" id="submit-btn">Complete Payment</button>
     </form>
     
-    <a href="{{ url_for('index') }}" class="back-link">← Back to Home</a>
+    <!-- Container where Stripe Checkout will be embedded -->
+    <div id="checkout-container" style="display: none; margin-top: 30px;"></div>
+    
+    <a href="{{ url_for('index') }}" class="back-link" id="back-link" style="display: none;">← Back to Home</a>
 </div>
+
+<!-- Stripe.js for embedded checkout -->
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+    const stripe = Stripe('{{ stripe_publishable_key }}');
+    
+    const form = document.getElementById('payment-form');
+    const checkoutContainer = document.getElementById('checkout-container');
+    const submitBtn = document.getElementById('submit-btn');
+    const backLink = document.getElementById('back-link');
+    
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const name = document.getElementById('name').value;
+        const email = document.getElementById('email').value;
+        
+        if (!name || !email) {
+            alert('Please fill in all fields');
+            return;
+        }
+        
+        // Disable button
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Loading...';
+        
+        try {
+            // Create checkout session
+            const response = await fetch('/create-checkout-session', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    name: name,
+                    email: email
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                alert(data.error);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Complete Payment';
+                return;
+            }
+            
+            // Hide form, show checkout container
+            form.style.display = 'none';
+            checkoutContainer.style.display = 'block';
+            
+            // Embed Stripe Checkout
+            const checkout = await stripe.initEmbeddedCheckout({
+                clientSecret: data.clientSecret
+            });
+            
+            checkout.mount('#checkout-container');
+            
+        } catch (error) {
+            console.error('Error:', error);
+            alert('An error occurred. Please try again.');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Complete Payment';
+        }
+    });
+</script>
 {% endblock %}
 
