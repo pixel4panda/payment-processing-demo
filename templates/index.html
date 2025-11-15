@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Payment Prototype{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Welcome to Payment Prototype</h1>
+    <p>Choose your payment option below</p>
+</div>
+
+<div class="cards">
+    <div class="card">
+        <h2>One-Time Payment</h2>
+        <div class="price">$25<span> one-time</span></div>
+        <ul>
+            <li>Single payment</li>
+            <li>No recurring charges</li>
+            <li>Full access</li>
+            <li>Lifetime value</li>
+        </ul>
+        <a href="{{ url_for('one_time_payment') }}" class="btn">Pay $25 Now</a>
+    </div>
+    
+    <div class="card">
+        <h2>Monthly Subscription</h2>
+        <div class="price">$10<span>/month</span></div>
+        <ul>
+            <li>Recurring monthly</li>
+            <li>Cancel anytime</li>
+            <li>Full access</li>
+            <li>Flexible payment</li>
+        </ul>
+        <a href="{{ url_for('subscribe') }}" class="btn">Subscribe Now</a>
+    </div>
+</div>
+
+<div style="text-align: center; color: white; margin-top: 40px;">
+    <p>Already have an account? <a href="#" onclick="showEmailPrompt()" style="color: white; text-decoration: underline;">View Dashboard</a></p>
+</div>
+
+<script>
+function showEmailPrompt() {
+    const email = prompt('Enter your email to view your dashboard:');
+    if (email) {
+        window.location.href = '/dashboard?email=' + encodeURIComponent(email);
+    }
+}
+</script>
+{% endblock %}
+

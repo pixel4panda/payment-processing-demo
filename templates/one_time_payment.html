@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}One-Time Payment - Payment Prototype{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <h2 style="text-align: center; color: #333; margin-bottom: 30px;">One-Time Payment - $25</h2>
+    
+    <form method="POST" action="{{ url_for('one_time_payment') }}">
+        <div class="form-group">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" required placeholder="Enter your full name">
+        </div>
+        
+        <div class="form-group">
+            <label for="email">Email Address</label>
+            <input type="email" id="email" name="email" required placeholder="Enter your email">
+        </div>
+        
+        <button type="submit" class="btn">Complete Payment - $25</button>
+    </form>
+    
+    <a href="{{ url_for('index') }}" class="back-link">← Back to Home</a>
+</div>
+{% endblock %}
+

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Payment Prototype{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h2>User Dashboard</h2>
+    
+    <div class="dashboard-section">
+        <h3>User Information</h3>
+        <div class="dashboard-item">
+            <p><strong>Name:</strong> {{ user.name }}</p>
+            <p><strong>Email:</strong> {{ user.email }}</p>
+            <p><strong>Member Since:</strong> {{ user.created_at.strftime('%B %d, %Y') }}</p>
+        </div>
+    </div>
+    
+    <div class="dashboard-section">
+        <h3>One-Time Payments</h3>
+        {% if payments %}
+            {% for payment in payments %}
+                {% if payment.payment_type == 'one_time' %}
+                <div class="dashboard-item">
+                    <p><strong>Amount:</strong> ${{ payment.amount }}</p>
+                    <p><strong>Status:</strong> <span class="status-badge status-{{ payment.status }}">{{ payment.status|title }}</span></p>
+                    <p><strong>Date:</strong> {{ payment.created_at.strftime('%B %d, %Y at %I:%M %p') }}</p>
+                </div>
+                {% endif %}
+            {% endfor %}
+        {% else %}
+            <p style="color: #666;">No one-time payments found.</p>
+        {% endif %}
+    </div>
+    
+    <div class="dashboard-section">
+        <h3>Subscriptions</h3>
+        {% if subscriptions %}
+            {% for subscription in subscriptions %}
+            <div class="dashboard-item">
+                <p><strong>Amount:</strong> ${{ subscription.amount }}/month</p>
+                <p><strong>Status:</strong> <span class="status-badge status-{{ subscription.status }}">{{ subscription.status|title }}</span></p>
+                <p><strong>Start Date:</strong> {{ subscription.start_date.strftime('%B %d, %Y') }}</p>
+                <p><strong>Next Billing:</strong> {{ subscription.next_billing_date.strftime('%B %d, %Y') }}</p>
+                {% if subscription.cancelled_at %}
+                <p><strong>Cancelled:</strong> {{ subscription.cancelled_at.strftime('%B %d, %Y') }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+            <p style="color: #666;">No active subscriptions found.</p>
+        {% endif %}
+    </div>
+    
+    <a href="{{ url_for('index') }}" class="back-link">← Back to Home</a>
+</div>
+{% endblock %}
+
