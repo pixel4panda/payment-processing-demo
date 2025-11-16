@@ -157,6 +157,14 @@ The SQLite database (`instance/payment_prototype.db`) will be created automatica
    - Use Stripe test mode and test cards
    - Test both one-time payments and subscription flows
    - Verify webhook handling
+   
+| Card Type | Number | CVC | Expiry |
+| --- | --- | --- | --- |
+| Visa | 4242 4242 4242 4242 | any 3 digits | any future date |
+| Mastercard | 5555 5555 5555 4444 | any 3 digits | any future date |
+| Amex | 3782 822463 10005 | any 4 digits | any future date |
+| Decline Payment | 4000 0000 0000 0002 | any 3 digits | any future date |
+   
 
 ### Stripe Resources
 
