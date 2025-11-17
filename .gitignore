@@ -30,4 +30,8 @@ instance/
 instance/payment_prototype.db
 instance/schema.sql
 
+# Stripe CLI (downloaded binary tool)
+stripe-cli/
+stripe-cli.zip
+
 
