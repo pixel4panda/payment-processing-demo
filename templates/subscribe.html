@@ -4,9 +4,37 @@
 
 {% block content %}
 <div class="form-container">
-    <h2 style="text-align: center; color: #333; margin-bottom: 30px;">Monthly Subscription - $10/month</h2>
+    <h2 style="text-align: center; color: #333; margin-bottom: 30px;">Choose Your Subscription Plan</h2>
     
-    <form method="POST" action="{{ url_for('subscribe') }}">
+    <!-- Subscription Plan Selection -->
+    <div style="display: flex; gap: 20px; margin-bottom: 30px; justify-content: center; flex-wrap: wrap;">
+        <div class="plan-card" id="plan-basic" style="border: 2px solid #ddd; border-radius: 8px; padding: 20px; cursor: pointer; flex: 1; min-width: 200px; max-width: 300px; transition: all 0.3s;">
+            <h3 style="margin-top: 0;">Basic Bitch</h3>
+            {% if one_price_info %}
+                <p style="font-size: 24px; font-weight: bold; color: #333;">
+                    {{ one_price_info.currency }}{{ "%.2f"|format(one_price_info.amount) }}/month
+                </p>
+            {% else %}
+                <p style="font-size: 24px; font-weight: bold; color: #333;">Price TBD</p>
+            {% endif %}
+            <p style="color: #666; font-size: 14px;">Perfect for getting started</p>
+        </div>
+        
+        <div class="plan-card" id="plan-fancy" style="border: 2px solid #ddd; border-radius: 8px; padding: 20px; cursor: pointer; flex: 1; min-width: 200px; max-width: 300px; transition: all 0.3s;">
+            <h3 style="margin-top: 0;">Fancy</h3>
+            {% if two_price_info %}
+                <p style="font-size: 24px; font-weight: bold; color: #333;">
+                    {{ two_price_info.currency }}{{ "%.2f"|format(two_price_info.amount) }}/month
+                </p>
+            {% else %}
+                <p style="font-size: 24px; font-weight: bold; color: #333;">Price TBD</p>
+            {% endif %}
+            <p style="color: #666; font-size: 14px;">All the premium features</p>
+        </div>
+    </div>
+    
+    <!-- Form to collect user info -->
+    <form id="subscription-form">
         <div class="form-group">
             <label for="name">Full Name</label>
             <input type="text" id="name" name="name" required placeholder="Enter your full name">
@@ -17,10 +45,112 @@
             <input type="email" id="email" name="email" required placeholder="Enter your email">
         </div>
         
-        <button type="submit" class="btn">Subscribe - $10/month</button>
+        <input type="hidden" id="plan_tier" name="plan_tier" required>
+        
+        <button type="submit" class="btn" id="submit-btn">Subscribe</button>
     </form>
     
-    <a href="{{ url_for('index') }}" class="back-link">← Back to Home</a>
+    <!-- Container where Stripe Checkout will be embedded -->
+    <div id="checkout-container" style="display: none; margin-top: 30px;"></div>
+    
+    <a href="{{ url_for('index') }}" class="back-link" id="back-link" style="display: none;">← Back to Home</a>
 </div>
+
+<!-- Stripe.js for embedded checkout -->
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+    const stripe = Stripe('{{ stripe_publishable_key }}');
+    
+    let selectedPlan = null;
+    
+    // Plan selection
+    document.getElementById('plan-basic').addEventListener('click', function() {
+        selectPlan('one', this);
+    });
+    
+    document.getElementById('plan-fancy').addEventListener('click', function() {
+        selectPlan('two', this);
+    });
+    
+    function selectPlan(plan, element) {
+        selectedPlan = plan;
+        document.getElementById('plan_tier').value = plan;
+        
+        // Update visual selection
+        document.querySelectorAll('.plan-card').forEach(card => {
+            card.style.borderColor = '#ddd';
+            card.style.backgroundColor = '';
+        });
+        element.style.borderColor = '#007bff';
+        element.style.backgroundColor = '#f0f8ff';
+    }
+    
+    const form = document.getElementById('subscription-form');
+    const checkoutContainer = document.getElementById('checkout-container');
+    const submitBtn = document.getElementById('submit-btn');
+    const backLink = document.getElementById('back-link');
+    
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        if (!selectedPlan) {
+            alert('Please select a subscription plan');
+            return;
+        }
+        
+        const name = document.getElementById('name').value;
+        const email = document.getElementById('email').value;
+        
+        if (!name || !email) {
+            alert('Please fill in all fields');
+            return;
+        }
+        
+        // Disable button
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Loading...';
+        
+        try {
+            // Create checkout session
+            const response = await fetch('/create-subscription-checkout-session', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: new URLSearchParams({
+                    name: name,
+                    email: email,
+                    plan_tier: selectedPlan
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.error) {
+                alert(data.error);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Subscribe';
+                return;
+            }
+            
+            // Hide form, show checkout container
+            form.style.display = 'none';
+            checkoutContainer.style.display = 'block';
+            
+            // Embed Stripe Checkout
+            const checkout = await stripe.initEmbeddedCheckout({
+                clientSecret: data.clientSecret
+            });
+            
+            checkout.mount('#checkout-container');
+            
+        } catch (error) {
+            console.error('Error:', error);
+            alert('An error occurred. Please try again.');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Subscribe';
+        }
+    });
+</script>
 {% endblock %}
 

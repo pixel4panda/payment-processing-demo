@@ -37,6 +37,9 @@
         {% if subscriptions %}
             {% for subscription in subscriptions %}
             <div class="dashboard-item">
+                {% if subscription.plan_tier %}
+                <p><strong>Plan:</strong> {{ subscription.plan_tier|title }}</p>
+                {% endif %}
                 <p><strong>Amount:</strong> ${{ subscription.amount }}/month</p>
                 <p><strong>Status:</strong> <span class="status-badge status-{{ subscription.status }}">{{ subscription.status|title }}</span></p>
                 <p><strong>Start Date:</strong> {{ subscription.start_date.strftime('%B %d, %Y') }}</p>

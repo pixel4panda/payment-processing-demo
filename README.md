@@ -175,6 +175,30 @@ The SQLite database (`instance/payment_prototype.db`) will be created automatica
 - **Webhooks Guide**: https://stripe.com/docs/webhooks
 - **Test Cards**: https://stripe.com/docs/testing
 
+### Webhook explanation and decision process
+A webhook is an automated message sent from one application to another (via an HTTP request), triggered by a specific event. They instantly deliver real-time data about an event, eliminating the need for one application to constantly "poll" another for updates.
+
+      User A   triggers an event    on a    Source Application
+      Source Application   sends   HTTP POST request    to    webhook URL
+      Destination Application    listening at the URL,   receives    HTTP POST request
+      Destination Application    performs action    
+
+or
+
+      ELI5
+      Bob    buys a book    on a   Website
+      Website    sends   letter with order    to    mail
+      Bookstore     checking mail,    receives    letter with order
+      Bookstore   gives book to Bob
+
+You want a webhook whenever you need your server to automatically react to an event in real time. Examples:
+
+- Payment succeeded / failed
+- Subscription renewed / canceled
+- Inventory updated in a 3rd-party service
+
+
+
 ## Current Status
 
 ✅ **Completed**:
