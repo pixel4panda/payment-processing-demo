@@ -216,7 +216,32 @@ The SQLite database (`instance/payment_prototype.db`) will be created automatica
 - **Test Cards**: https://stripe.com/docs/testing
 - **Webhook Events Reference**: https://docs.stripe.com/api/events/types - **Complete list of all available webhook events**
 
-## Webhook Events Reference
+
+### Webhook explanation and decision process
+A webhook is an automated message sent from one application to another (via an HTTP request), triggered by a specific event. They instantly deliver real-time data about an event, eliminating the need for one application to constantly "poll" another for updates.
+
+      User A   triggers an event    on a    Source Application
+      Source Application   sends   HTTP POST request    to    webhook URL
+      Destination Application    listening at the URL,   receives    HTTP POST request
+      Destination Application    performs action    
+
+or
+
+      ELI5
+      Bob    buys a book    on a   Website
+      Website    sends   letter with order    to    mail
+      Bookstore     checking mail,    receives    letter with order
+      Bookstore   gives book to Bob
+
+You want a webhook whenever you need your server to automatically react to an event in real time. Examples:
+
+- Payment succeeded / failed
+- Subscription renewed / canceled
+- Inventory updated in a 3rd-party service
+
+IMPORTANT: Webhook endpoints either have a specific API version set or use the default API version of the Stripe account. If you use any of the supported static language SDKs (.NET, Java or Go) to process events, the API version set for webhooks should match the version used to generate the SDKs. 
+
+*Example: if you are using Python, check the documentation. As of 251123 it states Python 3.6 or newer required.*
 
 **Where to find all available events**: The complete list of all Stripe webhook events is available at: https://docs.stripe.com/api/events/types
 
@@ -308,32 +333,6 @@ This application currently handles the following webhook events:
 - When a customer's default payment method changes, `customer.updated` fires
 - The `invoice_settings.default_payment_method` field in the customer object will reflect the new default
 - You can also listen to `payment_method.attached` to know when new methods are added
-
-### Webhook explanation and decision process
-A webhook is an automated message sent from one application to another (via an HTTP request), triggered by a specific event. They instantly deliver real-time data about an event, eliminating the need for one application to constantly "poll" another for updates.
-
-      User A   triggers an event    on a    Source Application
-      Source Application   sends   HTTP POST request    to    webhook URL
-      Destination Application    listening at the URL,   receives    HTTP POST request
-      Destination Application    performs action    
-
-or
-
-      ELI5
-      Bob    buys a book    on a   Website
-      Website    sends   letter with order    to    mail
-      Bookstore     checking mail,    receives    letter with order
-      Bookstore   gives book to Bob
-
-You want a webhook whenever you need your server to automatically react to an event in real time. Examples:
-
-- Payment succeeded / failed
-- Subscription renewed / canceled
-- Inventory updated in a 3rd-party service
-
-IMPORTANT: Webhook endpoints either have a specific API version set or use the default API version of the Stripe account. If you use any of the supported static language SDKs (.NET, Java or Go) to process events, the API version set for webhooks should match the version used to generate the SDKs. 
-*Example: if you are using Python, check the documentation. As of 251123 it states Python 3.6 or newer required.*
-
 
 
 ## Current Status
