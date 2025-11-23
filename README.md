@@ -77,6 +77,46 @@ While other processors exist (PayPal, Square, Moneris, etc.), Stripe offers the 
     └── dashboard.html    # User dashboard
 ```
 
+## Code Organization (app.py)
+
+The Stripe integration in `app.py` is organized into clear sections:
+
+### **SECTION 1: CHECKOUT SESSION - ONE-TIME PAYMENT**
+- `/create-checkout-session` - Creates Stripe checkout session for one-time payments
+- Returns `clientSecret` for embedded checkout
+
+### **SECTION 2: CHECKOUT SESSION - SUBSCRIPTION**
+- `/create-subscription-checkout-session` - Creates Stripe checkout session for subscriptions
+- Supports multiple subscription tiers (plan_one, plan_two)
+- Returns `clientSecret` for embedded checkout
+
+### **SECTION 3: WEBHOOK HANDLER**
+- `/webhook` - Primary handler for all Stripe webhook events
+- Handles the following events:
+  - `checkout.session.completed` - One-time payment and subscription checkout completion
+  - `customer.subscription.created` - Subscription successfully created for the first time
+  - `customer.subscription.updated` - Subscription changed (upgrade/downgrade/status change)
+  - `customer.subscription.deleted` - Subscription cancelled
+  - `invoice.payment_succeeded` - Subscription renewed successfully
+  - `invoice.payment_failed` - Subscription payment failed
+  - `customer.updated` - Customer information changed (name, email, address, default payment method)
+  - `payment_method.attached` - New payment method attached to customer
+
+### **SECTION 4: WEBHOOK HANDLER FUNCTIONS**
+- `handle_checkout_completed()` - Processes one-time payment success (creates Payment record)
+- `handle_subscription_created()` - Creates subscription record when subscription is first created
+- `handle_subscription_updated()` - Updates subscription when plan/status changes
+- `handle_subscription_deleted()` - Marks subscription as cancelled
+- `handle_invoice_payment_succeeded()` - Updates subscription on successful renewal
+- `handle_invoice_payment_failed()` - Updates subscription status when payment fails
+- `handle_customer_updated()` - Updates customer information (name, email, etc.)
+- `handle_payment_method_attached()` - Logs when a new payment method is attached to a customer
+
+### **SECTION 5: SUCCESS ROUTES (Fallback for user redirects)**
+- `/payment/success` - Fallback route for one-time payment redirects
+- `/subscription/success` - Fallback route for subscription redirects
+- **Note**: These are fallback routes for user experience. The webhook handlers (Section 3 & 4) are the primary source of truth for payment/subscription processing.
+
 ## Database Schema
 
 - **users**: Stores user information (email, name, created_at)
@@ -174,6 +214,100 @@ The SQLite database (`instance/payment_prototype.db`) will be created automatica
 - **Subscriptions API**: https://stripe.com/docs/api/subscriptions
 - **Webhooks Guide**: https://stripe.com/docs/webhooks
 - **Test Cards**: https://stripe.com/docs/testing
+- **Webhook Events Reference**: https://docs.stripe.com/api/events/types - **Complete list of all available webhook events**
+
+## Webhook Events Reference
+
+**Where to find all available events**: The complete list of all Stripe webhook events is available at: https://docs.stripe.com/api/events/types
+
+This application currently handles the following webhook events:
+
+### Payment & Checkout Events
+
+#### `checkout.session.completed`
+- **When it fires**: After a customer successfully completes a checkout session
+- **What it handles**: 
+  - One-time payment success (creates Payment record in database)
+  - Initial subscription checkout completion (subscription creation handled separately via `customer.subscription.created`)
+- **Handler function**: `handle_checkout_completed()`
+
+### Subscription Events
+
+#### `customer.subscription.created`
+- **When it fires**: When a subscription is successfully created for the first time
+- **What it handles**: Creates subscription record in database with plan tier, amount, and billing dates
+- **Handler function**: `handle_subscription_created()`
+
+#### `customer.subscription.updated`
+- **When it fires**: When subscription properties change
+- **What it handles**: 
+  - Plan tier changes (upgrade/downgrade)
+  - Subscription status changes (active → past_due, etc.)
+  - Billing cycle changes
+  - Subscription amount changes
+- **Handler function**: `handle_subscription_updated()`
+- **Note**: This does NOT fire for customer info changes (name, address) - see `customer.updated`
+
+#### `customer.subscription.deleted`
+- **When it fires**: When a subscription is cancelled
+- **What it handles**: Marks subscription as cancelled and records cancellation date
+- **Handler function**: `handle_subscription_deleted()`
+
+### Invoice Events
+
+#### `invoice.payment_succeeded`
+- **When it fires**: When a subscription invoice payment succeeds (renewal)
+- **What it handles**: Updates subscription's next billing date and ensures status is active
+- **Handler function**: `handle_invoice_payment_succeeded()`
+
+#### `invoice.payment_failed`
+- **When it fires**: When a subscription invoice payment fails
+- **What it handles**: Updates subscription status to 'past_due'
+- **Handler function**: `handle_invoice_payment_failed()`
+
+### Customer Events
+
+#### `customer.updated`
+- **When it fires**: When customer object properties change
+- **What it handles**: 
+  - Name changes
+  - Email changes
+  - Address changes (when implemented)
+  - Phone number changes (when implemented)
+  - Default payment method changes
+  - Customer metadata changes
+- **Handler function**: `handle_customer_updated()`
+- **Important**: This is different from `customer.subscription.updated` - that handles subscription changes, this handles customer profile changes
+
+### Payment Method Events
+
+#### `payment_method.attached`
+- **When it fires**: When a payment method is attached to a customer
+- **What it handles**: 
+  - New payment method added to customer
+  - Logs the attachment event
+  - Identifies if it's the default payment method
+- **Handler function**: `handle_payment_method_attached()`
+- **Difference from `setup_intent.succeeded`**: 
+  - `payment_method.attached` fires when a payment method is attached to a customer
+  - `setup_intent.succeeded` fires when a SetupIntent succeeds (used to set up payment methods for future use)
+  - Both can occur, but `payment_method.attached` is more direct for tracking when a customer adds a payment method
+
+### Event Differences Explained
+
+**`customer.updated` vs `customer.subscription.updated`**:
+- `customer.updated` = Customer profile changes (name, email, address, default payment method)
+- `customer.subscription.updated` = Subscription changes (plan, status, billing cycle)
+
+**`payment_method.attached` vs `setup_intent.succeeded`**:
+- `payment_method.attached` = Payment method successfully attached to customer (direct event)
+- `setup_intent.succeeded` = SetupIntent completed (indirect - may or may not result in attachment)
+- **Recommendation**: Use `payment_method.attached` for tracking when customers add payment methods
+
+**`customer.updated` for payment method changes**:
+- When a customer's default payment method changes, `customer.updated` fires
+- The `invoice_settings.default_payment_method` field in the customer object will reflect the new default
+- You can also listen to `payment_method.attached` to know when new methods are added
 
 ### Webhook explanation and decision process
 A webhook is an automated message sent from one application to another (via an HTTP request), triggered by a specific event. They instantly deliver real-time data about an event, eliminating the need for one application to constantly "poll" another for updates.
@@ -197,6 +331,9 @@ You want a webhook whenever you need your server to automatically react to an ev
 - Subscription renewed / canceled
 - Inventory updated in a 3rd-party service
 
+IMPORTANT: Webhook endpoints either have a specific API version set or use the default API version of the Stripe account. If you use any of the supported static language SDKs (.NET, Java or Go) to process events, the API version set for webhooks should match the version used to generate the SDKs. 
+*Example: if you are using Python, check the documentation. As of 251123 it states Python 3.6 or newer required.*
+
 
 
 ## Current Status
@@ -215,13 +352,11 @@ You want a webhook whenever you need your server to automatically react to an ev
 
 ⚠️ **This is a prototype** - Current implementation uses mock payments. For production, you must:
 
-- ✅ Integrate with Stripe (or another payment processor)
+- ✅ Integrate with Stripe 
 - ✅ Implement proper authentication and session management
 - ✅ Add HTTPS/SSL encryption
 - ✅ Implement proper error handling and validation
-- ✅ Add payment webhooks for subscription renewals
-- ✅ Set up proper security measures
-- ✅ Use environment variables for sensitive data (API keys)
+- ✅ Set up proper extra security measures
 - ✅ Add database migrations (Flask-Migrate)
 - ✅ Implement proper logging and monitoring
 - ✅ Add rate limiting and security headers

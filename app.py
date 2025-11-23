@@ -113,7 +113,13 @@ def dashboard():
     
     return render_template('dashboard.html', user=user, payments=payments, subscriptions=subscriptions)
 
-#-------Stripe incorporation-------
+# ===================================================================
+# Stripe Incorporaiton
+# ===================================================================
+
+# -------------------------------------------------------------------
+# SECTION 1: CHECKOUT SESSION - ONE-TIME PAYMENT
+# -------------------------------------------------------------------
 @app.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
     """Create a Stripe Checkout Session for one-time payment"""
@@ -175,67 +181,9 @@ def create_checkout_session():
         # Return JSON error for AJAX request
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-@app.route('/payment/success')
-def payment_success():
-    """
-    Handle successful payment completion (fallback route for embedded checkout)
-    
-    NOTE: With embedded checkout, payment completion is typically handled in-place.
-    This route serves as a fallback if Stripe redirects here, or for webhook verification.
-    In production, you should use webhooks to reliably track payment completion.
-    """
-    # Get session_id from URL query parameter
-    # Stripe automatically adds this when redirecting: ?session_id=cs_test_abc123...
-    # The {CHECKOUT_SESSION_ID} placeholder in return_url gets replaced by Stripe
-    session_id = request.args.get('session_id')
-    
-    if not session_id:
-        flash('No session ID provided', 'error')
-        return redirect(url_for('index'))
-    
-    try:
-        # Retrieve the checkout session from Stripe to verify payment
-        checkout_session = stripe.checkout.Session.retrieve(session_id)
-        
-        # Get user from metadata
-        user_id = checkout_session.metadata.get('user_id')
-        payment_type = checkout_session.metadata.get('payment_type')
-        
-        if user_id and payment_type == 'one_time':
-            user = User.query.get(int(user_id))
-            if user:
-                # Check if payment already recorded
-                existing_payment = Payment.query.filter_by(
-                    user_id=user.id,
-                    payment_type='one_time',
-                    transaction_id=session_id
-                ).first()
-                
-                if not existing_payment:
-                    # Get amount from checkout session (from Stripe, not hardcoded)
-                    amount = checkout_session.amount_total / 100  # Convert from cents
-                    
-                    # Create payment record
-                    payment = Payment(
-                        user_id=user.id,
-                        amount=amount,
-                        payment_type='one_time',
-                        status='completed',
-                        transaction_id=session_id
-                    )
-                    db.session.add(payment)
-                    db.session.commit()
-        
-        flash('Payment successful! Thank you for your payment.', 'success')
-        return redirect(url_for('index'))
-        
-    except stripe.error.StripeError as e:
-        flash(f'Error verifying payment: {str(e)}', 'error')
-        return redirect(url_for('index'))
-    except Exception as e:
-        flash(f'An error occurred: {str(e)}', 'error')
-        return redirect(url_for('index'))
-
+# -------------------------------------------------------------------
+# SECTION 2: CHECKOUT SESSION - SUBSCRIPTION
+# -------------------------------------------------------------------
 @app.route('/create-subscription-checkout-session', methods=['POST'])
 def create_subscription_checkout_session():
     """Create a Stripe Checkout Session for subscription"""
@@ -296,68 +244,33 @@ def create_subscription_checkout_session():
     except Exception as e:
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-@app.route('/subscription/success')
-def subscription_success():
-    """Handle successful subscription completion (fallback route)"""
-    session_id = request.args.get('session_id')
-    
-    if not session_id:
-        flash('No session ID provided', 'error')
-        return redirect(url_for('index'))
-    
-    try:
-        # Retrieve the checkout session from Stripe
-        checkout_session = stripe.checkout.Session.retrieve(session_id)
-        
-        # Get user from metadata
-        user_id = checkout_session.metadata.get('user_id')
-        payment_type = checkout_session.metadata.get('payment_type')
-        
-        if user_id and payment_type == 'subscription':
-            # Subscription will be created via webhook, but we can show success message
-            flash('Subscription successful! Your subscription is being activated.', 'success')
-            return redirect(url_for('index'))
-        
-        flash('Subscription processing...', 'info')
-        return redirect(url_for('index'))
-        
-    except stripe.error.StripeError as e:
-        flash(f'Error verifying subscription: {str(e)}', 'error')
-        return redirect(url_for('index'))
-    except Exception as e:
-        flash(f'An error occurred: {str(e)}', 'error')
-        return redirect(url_for('index'))
-
+# -------------------------------------------------------------------
+# SECTION 3: WEBHOOK HANDLER
+# -------------------------------------------------------------------
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle Stripe webhook events"""
+
+    # Obtains the raw body of the request → payload
+    # (json as plain text ex.: 
+    # { "id": "evt_123", "type": "checkout.session.completed", "data": {"object": { "id": "cs_123","amount_total": 2000}}})
+    # Obtains the Stripe signature HTTP header → sig_header
+    # Obtains your secret key for verifying the webhook → webhook_secret
+
     payload = request.get_data(as_text=True)
     sig_header = request.headers.get('Stripe-Signature')
     webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
     
     if not webhook_secret:
-        print('Warning: STRIPE_WEBHOOK_SECRET not set. Webhook verification skipped.')
-        # In production, you should always verify webhooks
-        # For development, you can use Stripe CLI to forward events
+        return jsonify({'error': 'Webhook secret not configured'}), 500
     
     try:
-        if webhook_secret:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, webhook_secret
-            )
-        else:
-            # For development without webhook secret
-            event = json.loads(payload)
-            if 'type' not in event:
-                return jsonify({'error': 'Invalid event'}), 400
-    except ValueError as e:
-        # Invalid payload
-        print(f'Invalid payload: {e}')
-        return jsonify({'error': 'Invalid payload'}), 400
-    except stripe.error.SignatureVerificationError as e:
-        # Invalid signature
-        print(f'Invalid signature: {e}')
-        return jsonify({'error': 'Invalid signature'}), 400
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except Exception as e:
+        print(f'Webhook error: {str(e)}')
+        return jsonify({'error': 'Webhook verification failed'}), 400
     
     # Handle the event
     event_type = event['type']
@@ -391,24 +304,38 @@ def webhook():
             # But I'll add it anyway in case you change your mind
             handle_invoice_payment_failed(event_data)
         
+        elif event_type == 'customer.updated':
+            # Customer information changed (name, email, address, default payment method, etc.)
+            handle_customer_updated(event_data)
+        
+        elif event_type == 'payment_method.attached':
+            # New payment method attached to customer
+            handle_payment_method_attached(event_data)
+        
         return jsonify({'status': 'success'}), 200
     
     except Exception as e:
         print(f'Error handling webhook event {event_type}: {str(e)}')
         return jsonify({'error': str(e)}), 500
 
+# -------------------------------------------------------------------
+# SECTION 4: WEBHOOK HANDLER FUNCTIONS
+# -------------------------------------------------------------------
+
 def handle_checkout_completed(session):
-    """Handle checkout.session.completed event"""
-    # This handles both one-time payments and initial subscription creation
-    # For subscriptions, the subscription will be created via customer.subscription.created
-    # For one-time payments, we create the payment record here
+    """
+    Handle checkout.session.completed event
     
+    This webhook fires for:
+    - One-time payment success (creates Payment record)
+    - Initial subscription checkout completion (subscription created via customer.subscription.created)
+    """
     metadata = session.get('metadata', {})
     payment_type = metadata.get('payment_type')
     user_id = metadata.get('user_id')
     
     if payment_type == 'one_time' and user_id:
-        # Handle one-time payment (already handled in payment_success route, but webhook is more reliable)
+        # Handle one-time payment success via webhook (primary handler)
         user = User.query.get(int(user_id))
         if user:
             session_id = session.get('id')
@@ -611,6 +538,175 @@ def handle_invoice_payment_failed(invoice):
     existing_sub.status = 'past_due'
     db.session.commit()
     print(f'Subscription payment failed: {subscription_id}')
+
+def handle_customer_updated(customer):
+    """Handle customer.updated - customer information changed"""
+    customer_id = customer.get('id')
+    email = customer.get('email')
+    
+    if not email:
+        print(f'No email found for customer {customer_id}')
+        return
+    
+    # Find user by email
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        print(f'User not found for email {email}')
+        return
+    
+    # Update user information
+    name = customer.get('name')
+    if name and name != user.name:
+        user.name = name
+        print(f'Updated name for user {user.id}: {user.name} -> {name}')
+    
+    # Note: Address, phone, and other fields would be stored here when added to User model
+    # For now, we only update the name
+    
+    db.session.commit()
+    print(f'Customer updated: {customer_id}')
+
+def handle_payment_method_attached(payment_method):
+    """Handle payment_method.attached - new payment method attached to customer"""
+    payment_method_id = payment_method.get('id')
+    customer_id = payment_method.get('customer')
+    
+    if not customer_id:
+        print(f'No customer ID found for payment method {payment_method_id}')
+        return
+    
+    # Get customer from Stripe to find user
+    try:
+        customer = stripe.Customer.retrieve(customer_id)
+        email = customer.get('email')
+        
+        if not email:
+            print(f'No email found for customer {customer_id}')
+            return
+        
+        # Find user by email
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            print(f'User not found for email {email}')
+            return
+        
+        # Check if this is the default payment method
+        default_payment_method = customer.get('invoice_settings', {}).get('default_payment_method')
+        is_default = (default_payment_method == payment_method_id)
+        
+        # Note: Payment method details would be stored here when PaymentMethod model is added
+        # For now, we just log the event
+        print(f'Payment method {payment_method_id} attached to customer {customer_id} (user {user.id})')
+        if is_default:
+            print(f'Payment method {payment_method_id} is now the default payment method')
+        
+    except Exception as e:
+        print(f'Error handling payment method attachment: {str(e)}')
+
+# -------------------------------------------------------------------
+# SECTION 5: SUCCESS ROUTES (Fallback for user redirects)
+# These routes are fallbacks when users complete checkout and get redirected.
+# The webhook handlers above are the primary source of truth for payment/subscription processing.
+# -------------------------------------------------------------------
+
+@app.route('/payment/success')
+def payment_success():
+    """
+    Fallback route for one-time payment success (user redirect after checkout)
+    
+    NOTE: The primary handler is the webhook (checkout.session.completed).
+    This route is a fallback for when users complete checkout and get redirected.
+    The webhook is more reliable and should be the source of truth.
+    """
+    # Get session_id from URL query parameter
+    # Stripe automatically adds this when redirecting: ?session_id=cs_test_abc123...
+    # The {CHECKOUT_SESSION_ID} placeholder in return_url gets replaced by Stripe
+    session_id = request.args.get('session_id')
+    
+    if not session_id:
+        flash('No session ID provided', 'error')
+        return redirect(url_for('index'))
+    
+    try:
+        # Retrieve the checkout session from Stripe to verify payment
+        checkout_session = stripe.checkout.Session.retrieve(session_id)
+        
+        # Get user from metadata
+        user_id = checkout_session.metadata.get('user_id')
+        payment_type = checkout_session.metadata.get('payment_type')
+        
+        if user_id and payment_type == 'one_time':
+            user = User.query.get(int(user_id))
+            if user:
+                # Check if payment already recorded
+                existing_payment = Payment.query.filter_by(
+                    user_id=user.id,
+                    payment_type='one_time',
+                    transaction_id=session_id
+                ).first()
+                
+                if not existing_payment:
+                    # Get amount from checkout session (from Stripe, not hardcoded)
+                    amount = checkout_session.amount_total / 100  # Convert from cents
+                    
+                    # Create payment record
+                    payment = Payment(
+                        user_id=user.id,
+                        amount=amount,
+                        payment_type='one_time',
+                        status='completed',
+                        transaction_id=session_id
+                    )
+                    db.session.add(payment)
+                    db.session.commit()
+        
+        flash('Payment successful! Thank you for your payment.', 'success')
+        return redirect(url_for('index'))
+        
+    except stripe.error.StripeError as e:
+        flash(f'Error verifying payment: {str(e)}', 'error')
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f'An error occurred: {str(e)}', 'error')
+        return redirect(url_for('index'))
+
+@app.route('/subscription/success')
+def subscription_success():
+    """
+    Fallback route for subscription success (user redirect after checkout)
+    
+    NOTE: The primary handler is the webhook (customer.subscription.created).
+    This route is a fallback for when users complete checkout and get redirected.
+    The webhook is more reliable and should be the source of truth.
+    """
+    session_id = request.args.get('session_id')
+    
+    if not session_id:
+        flash('No session ID provided', 'error')
+        return redirect(url_for('index'))
+    
+    try:
+        # Retrieve the checkout session from Stripe
+        checkout_session = stripe.checkout.Session.retrieve(session_id)
+        
+        # Get user from metadata
+        user_id = checkout_session.metadata.get('user_id')
+        payment_type = checkout_session.metadata.get('payment_type')
+        
+        if user_id and payment_type == 'subscription':
+            # Subscription will be created via webhook, but we can show success message
+            flash('Subscription successful! Your subscription is being activated.', 'success')
+            return redirect(url_for('index'))
+        
+        flash('Subscription processing...', 'info')
+        return redirect(url_for('index'))
+        
+    except stripe.error.StripeError as e:
+        flash(f'Error verifying subscription: {str(e)}', 'error')
+        return redirect(url_for('index'))
+    except Exception as e:
+        flash(f'An error occurred: {str(e)}', 'error')
+        return redirect(url_for('index'))
 
 if __name__ == '__main__':
     with app.app_context():
