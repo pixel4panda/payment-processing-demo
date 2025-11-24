@@ -38,7 +38,10 @@ class Subscription(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     amount = db.Column(db.Numeric(10, 2), nullable=False)
-    status = db.Column(db.String(50), default='active')  # 'active', 'cancelled', 'expired'
+    status = db.Column(db.String(50), default='active')  # 'active', 'cancelled', 'expired', 'past_due'
+    plan_tier = db.Column(db.String(50), nullable=True)  # 'one', 'two', 'basic', 'fancy', etc.
+    stripe_subscription_id = db.Column(db.String(100), unique=True, nullable=True)
+    stripe_price_id = db.Column(db.String(100), nullable=True)
     start_date = db.Column(db.DateTime, nullable=False)
     next_billing_date = db.Column(db.DateTime, nullable=False)
     cancelled_at = db.Column(db.DateTime, nullable=True)

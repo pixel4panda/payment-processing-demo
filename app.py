@@ -162,7 +162,7 @@ def create_checkout_session():
             }],
             mode='payment',
             # For embedded mode, return_url is where to go after payment completes
-            return_url=base_url + url_for('payment_success') + '?session_id={CHECKOUT_SESSION_ID}',
+            return_url=base_url + '/payment/success?session_id={CHECKOUT_SESSION_ID}',
             # Metadata: Store custom data we can retrieve later
             metadata={
                 'user_id': user.id,        # Store user ID to find them when payment completes
@@ -228,7 +228,7 @@ def create_subscription_checkout_session():
                 'quantity': 1,
             }],
             mode='subscription',
-            return_url=base_url + url_for('subscription_success') + '?session_id={CHECKOUT_SESSION_ID}',
+            return_url=base_url + '/subscription/success?session_id={CHECKOUT_SESSION_ID}',
             metadata={
                 'user_id': user.id,
                 'payment_type': 'subscription',
@@ -250,7 +250,7 @@ def create_subscription_checkout_session():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     """Handle Stripe webhook events"""
-
+    
     # Obtains the raw body of the request → payload
     # (json as plain text ex.: 
     # { "id": "evt_123", "type": "checkout.session.completed", "data": {"object": { "id": "cs_123","amount_total": 2000}}})
@@ -262,6 +262,7 @@ def webhook():
     webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
     
     if not webhook_secret:
+        print('ERROR: STRIPE_WEBHOOK_SECRET not configured in environment')
         return jsonify({'error': 'Webhook secret not configured'}), 500
     
     try:
@@ -275,9 +276,8 @@ def webhook():
     # Handle the event
     event_type = event['type']
     event_data = event.get('data', {}).get('object', {})
-    
-    print(f'Received webhook event: {event_type}')
-    
+    event_id = event.get('id', 'unknown')
+        
     try:
         if event_type == 'checkout.session.completed':
             # Handle successful checkout (both one-time and subscription)
@@ -312,10 +312,14 @@ def webhook():
             # New payment method attached to customer
             handle_payment_method_attached(event_data)
         
+
         return jsonify({'status': 'success'}), 200
     
     except Exception as e:
-        print(f'Error handling webhook event {event_type}: {str(e)}')
+        print(f'[WEBHOOK] ERROR handling event {event_type}: {str(e)}')
+        import traceback
+        traceback.print_exc()
+        print('=' * 50)
         return jsonify({'error': str(e)}), 500
 
 # -------------------------------------------------------------------
@@ -335,7 +339,7 @@ def handle_checkout_completed(session):
     user_id = metadata.get('user_id')
     
     if payment_type == 'one_time' and user_id:
-        # Handle one-time payment success via webhook (primary handler)
+        # Handle one-time payment success via webhook 
         user = User.query.get(int(user_id))
         if user:
             session_id = session.get('id')
@@ -359,9 +363,14 @@ def handle_checkout_completed(session):
                 print(f'One-time payment recorded: ${amount} for user {user_id}')
 
 def handle_subscription_created(subscription):
-    """Handle customer.subscription.created - subscription successfully made for the first time"""
+    """
+    Handle customer.subscription.created event
+    This event fires when a subscription is successfully created for the first time
+    """
     stripe_subscription_id = subscription.get('id')
     customer_id = subscription.get('customer')
+    
+    print(f'Processing subscription.created for {stripe_subscription_id}')
     
     # Get customer email from Stripe
     try:
@@ -369,14 +378,18 @@ def handle_subscription_created(subscription):
         email = customer.get('email')
         
         if not email:
-            print(f'No email found for customer {customer_id}')
+            print(f'ERROR: No email found for customer {customer_id}')
             return
+        
+        print(f'Found customer email: {email}')
         
         # Find user by email
         user = User.query.filter_by(email=email).first()
         if not user:
-            print(f'User not found for email {email}')
+            print(f'ERROR: User not found for email {email}')
             return
+        
+        print(f'Found user: {user.id} ({user.email})')
         
         # Check if subscription already exists
         existing_sub = Subscription.query.filter_by(
@@ -384,13 +397,13 @@ def handle_subscription_created(subscription):
         ).first()
         
         if existing_sub:
-            print(f'Subscription {stripe_subscription_id} already exists')
+            print(f'Subscription {stripe_subscription_id} already exists in database')
             return
         
         # Get subscription details
         items = subscription.get('items', {}).get('data', [])
         if not items:
-            print(f'No items found in subscription {stripe_subscription_id}')
+            print(f'ERROR: No items found in subscription {stripe_subscription_id}')
             return
         
         price_id = items[0].get('price', {}).get('id')
@@ -400,18 +413,71 @@ def handle_subscription_created(subscription):
         # Determine plan tier from metadata or price ID
         metadata = subscription.get('metadata', {})
         plan_tier = metadata.get('plan_tier')
+        
+        # If not in subscription metadata, try to get from checkout session
         if not plan_tier:
-            # Try to infer from price ID environment variable names
-            if 'BASIC' in price_id.upper() or os.environ.get('STRIPE_PRICE_ID_SUBS_BASIC') == price_id:
-                plan_tier = 'basic'
-            elif 'FANCY' in price_id.upper() or os.environ.get('STRIPE_PRICE_ID_SUBS_FANCY') == price_id:
-                plan_tier = 'fancy'
+            # Try to find checkout session that created this subscription
+            # Look for recent checkout sessions for this customer
+            try:
+                checkout_sessions = stripe.checkout.Session.list(
+                    customer=customer_id,
+                    limit=10
+                )
+                for session in checkout_sessions.data:
+                    if session.mode == 'subscription' and session.subscription == stripe_subscription_id:
+                        session_metadata = session.get('metadata', {})
+                        plan_tier = session_metadata.get('plan_tier')
+                        if plan_tier:
+                            print(f'Found plan_tier from checkout session: {plan_tier}')
+                            break
+            except Exception as e:
+                print(f'Could not retrieve checkout session: {str(e)}')
+        
+        # If still no plan_tier, try to infer from price ID or environment variables
+        if not plan_tier:
+            # Check environment variables
+            if os.environ.get('STRIPE_PRICE_ID_SUBS_ONE') == price_id:
+                plan_tier = 'basic'  
+            elif os.environ.get('STRIPE_PRICE_ID_SUBS_TWO') == price_id:
+                plan_tier = 'fancy'  
             else:
                 plan_tier = 'unknown'
+                print(f'Warning: Could not determine plan_tier for price_id {price_id}')
         
-        # Get dates
-        start_date = datetime.fromtimestamp(subscription.get('current_period_start', 0))
-        next_billing = datetime.fromtimestamp(subscription.get('current_period_end', 0))
+        # Get dates - Stripe timestamps are in seconds (Unix timestamp)
+        current_period_start = subscription.get('current_period_start')
+        current_period_end = subscription.get('current_period_end')
+        
+        if current_period_start:
+            try:
+                # Stripe timestamps are in seconds, but check if it's milliseconds (> year 2100)
+                if current_period_start > 4102444800:  # Jan 1, 2100 in seconds
+                    # Likely milliseconds, convert to seconds
+                    start_date = datetime.fromtimestamp(current_period_start / 1000)
+                else:
+                    start_date = datetime.fromtimestamp(current_period_start)
+            except (ValueError, OSError, TypeError) as e:
+                print(f'ERROR: Invalid timestamp for current_period_start: {current_period_start} - {str(e)}')
+                start_date = datetime.utcnow()
+        else:
+            start_date = datetime.utcnow()
+            print(f'Warning: No current_period_start found, using current time')
+        
+        if current_period_end:
+            try:
+                # Stripe timestamps are in seconds, but check if it's milliseconds (> year 2100)
+                if current_period_end > 4102444800:  # Jan 1, 2100 in seconds
+                    # Likely milliseconds, convert to seconds
+                    next_billing = datetime.fromtimestamp(current_period_end / 1000)
+                else:
+                    next_billing = datetime.fromtimestamp(current_period_end)
+            except (ValueError, OSError, TypeError) as e:
+                print(f'ERROR: Invalid timestamp for current_period_end: {current_period_end} - {str(e)}')
+                next_billing = start_date + timedelta(days=30)
+        else:
+            # Default to 1 month from start if not provided
+            next_billing = start_date + timedelta(days=30)
+            print(f'Warning: No current_period_end found, using start_date + 30 days')
         
         # Create subscription record
         new_subscription = Subscription(
@@ -426,12 +492,17 @@ def handle_subscription_created(subscription):
         )
         db.session.add(new_subscription)
         db.session.commit()
-        print(f'Subscription created: {plan_tier} tier, ${amount}/month for user {user.id}')
+        print(f'SUCCESS: Subscription created - {plan_tier} tier, ${amount}/month for user {user.id} (email: {user.email})')
     except Exception as e:
-        print(f'Error creating subscription: {str(e)}')
+        print(f'ERROR creating subscription: {str(e)}')
+        import traceback
+        traceback.print_exc()
 
 def handle_subscription_updated(subscription):
-    """Handle customer.subscription.updated - subscription changed (upgrade/downgrade)"""
+    """
+    Handle customer.subscription.updated
+    This event fires when a subscription is changed (upgrade/downgrade)
+    """
     stripe_subscription_id = subscription.get('id')
     
     # Find existing subscription
@@ -471,7 +542,10 @@ def handle_subscription_updated(subscription):
     print(f'Subscription updated: {stripe_subscription_id}')
 
 def handle_subscription_deleted(subscription):
-    """Handle customer.subscription.deleted - subscription cancelled"""
+    """
+    Handle customer.subscription.deleted
+    This event fires when a subscription is cancelled
+    """
     stripe_subscription_id = subscription.get('id')
     
     # Find existing subscription
@@ -491,7 +565,10 @@ def handle_subscription_deleted(subscription):
     print(f'Subscription cancelled: {stripe_subscription_id}')
 
 def handle_invoice_payment_succeeded(invoice):
-    """Handle invoice.payment_succeeded - subscription renewed successfully"""
+    """
+    Handle invoice.payment_succeeded
+    This event fires when a subscription is renewed successfully
+    """
     subscription_id = invoice.get('subscription')
     
     if not subscription_id:
@@ -520,7 +597,10 @@ def handle_invoice_payment_succeeded(invoice):
         print(f'Error updating subscription renewal: {e}')
 
 def handle_invoice_payment_failed(invoice):
-    """Handle invoice.payment_failed - subscription payment failed (optional)"""
+    """
+    Handle invoice.payment_failed
+    This event fires when a subscription payment fails
+    """
     subscription_id = invoice.get('subscription')
     
     if not subscription_id:
@@ -540,7 +620,10 @@ def handle_invoice_payment_failed(invoice):
     print(f'Subscription payment failed: {subscription_id}')
 
 def handle_customer_updated(customer):
-    """Handle customer.updated - customer information changed"""
+    """
+    Handle customer.updated
+    This event fires when customer information changes
+    """
     customer_id = customer.get('id')
     email = customer.get('email')
     
@@ -604,109 +687,64 @@ def handle_payment_method_attached(payment_method):
         print(f'Error handling payment method attachment: {str(e)}')
 
 # -------------------------------------------------------------------
-# SECTION 5: SUCCESS ROUTES (Fallback for user redirects)
-# These routes are fallbacks when users complete checkout and get redirected.
-# The webhook handlers above are the primary source of truth for payment/subscription processing.
+# SECTION 5: FALLBACK ROUTES
 # -------------------------------------------------------------------
 
 @app.route('/payment/success')
 def payment_success():
-    """
-    Fallback route for one-time payment success (user redirect after checkout)
-    
-    NOTE: The primary handler is the webhook (checkout.session.completed).
-    This route is a fallback for when users complete checkout and get redirected.
-    The webhook is more reliable and should be the source of truth.
-    """
-    # Get session_id from URL query parameter
-    # Stripe automatically adds this when redirecting: ?session_id=cs_test_abc123...
-    # The {CHECKOUT_SESSION_ID} placeholder in return_url gets replaced by Stripe
+    """Success page after one-time payment completion"""
     session_id = request.args.get('session_id')
-    
     if not session_id:
-        flash('No session ID provided', 'error')
+        flash('Payment completed successfully!', 'success')
         return redirect(url_for('index'))
     
     try:
-        # Retrieve the checkout session from Stripe to verify payment
+        # Retrieve checkout session to get user email
         checkout_session = stripe.checkout.Session.retrieve(session_id)
-        
-        # Get user from metadata
         user_id = checkout_session.metadata.get('user_id')
-        payment_type = checkout_session.metadata.get('payment_type')
         
-        if user_id and payment_type == 'one_time':
+        if user_id:
             user = User.query.get(int(user_id))
             if user:
-                # Check if payment already recorded
-                existing_payment = Payment.query.filter_by(
-                    user_id=user.id,
-                    payment_type='one_time',
-                    transaction_id=session_id
-                ).first()
-                
-                if not existing_payment:
-                    # Get amount from checkout session (from Stripe, not hardcoded)
-                    amount = checkout_session.amount_total / 100  # Convert from cents
-                    
-                    # Create payment record
-                    payment = Payment(
-                        user_id=user.id,
-                        amount=amount,
-                        payment_type='one_time',
-                        status='completed',
-                        transaction_id=session_id
-                    )
-                    db.session.add(payment)
-                    db.session.commit()
+                flash('Payment successful! Thank you for your payment.', 'success')
+                return redirect(url_for('dashboard', email=user.email))
         
-        flash('Payment successful! Thank you for your payment.', 'success')
-        return redirect(url_for('index'))
-        
-    except stripe.error.StripeError as e:
-        flash(f'Error verifying payment: {str(e)}', 'error')
+        flash('Payment successful!', 'success')
         return redirect(url_for('index'))
     except Exception as e:
-        flash(f'An error occurred: {str(e)}', 'error')
+        flash('Payment completed successfully!', 'success')
         return redirect(url_for('index'))
 
 @app.route('/subscription/success')
 def subscription_success():
-    """
-    Fallback route for subscription success (user redirect after checkout)
-    
-    NOTE: The primary handler is the webhook (customer.subscription.created).
-    This route is a fallback for when users complete checkout and get redirected.
-    The webhook is more reliable and should be the source of truth.
-    """
+    """Success page after subscription checkout completion"""
     session_id = request.args.get('session_id')
-    
     if not session_id:
-        flash('No session ID provided', 'error')
+        flash('Subscription completed successfully!', 'success')
         return redirect(url_for('index'))
     
     try:
-        # Retrieve the checkout session from Stripe
+        # Retrieve checkout session to get user email
         checkout_session = stripe.checkout.Session.retrieve(session_id)
-        
-        # Get user from metadata
         user_id = checkout_session.metadata.get('user_id')
-        payment_type = checkout_session.metadata.get('payment_type')
         
-        if user_id and payment_type == 'subscription':
-            # Subscription will be created via webhook, but we can show success message
-            flash('Subscription successful! Your subscription is being activated.', 'success')
-            return redirect(url_for('index'))
+        if user_id:
+            user = User.query.get(int(user_id))
+            if user:
+                flash('Subscription successful! Your subscription is being activated.', 'success')
+                return redirect(url_for('dashboard', email=user.email))
         
-        flash('Subscription processing...', 'info')
-        return redirect(url_for('index'))
-        
-    except stripe.error.StripeError as e:
-        flash(f'Error verifying subscription: {str(e)}', 'error')
+        flash('Subscription successful!', 'success')
         return redirect(url_for('index'))
     except Exception as e:
-        flash(f'An error occurred: {str(e)}', 'error')
+        flash('Subscription completed successfully!', 'success')
         return redirect(url_for('index'))
+
+# ===================================================================
+# END OF STRIPE INCORPORATION
+# ===================================================================
+
+
 
 if __name__ == '__main__':
     with app.app_context():
